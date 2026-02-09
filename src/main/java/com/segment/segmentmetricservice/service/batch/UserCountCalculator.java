@@ -1,0 +1,137 @@
+package com.segment.segmentmetricservice.service.batch;
+
+import com.querydsl.core.BooleanBuilder;
+import com.querydsl.core.types.dsl.BooleanExpression;
+import com.querydsl.core.types.dsl.NumberPath;
+import com.querydsl.core.types.dsl.StringPath;
+import com.querydsl.jpa.impl.JPAQueryFactory;
+import com.segment.segmentmetricservice.domain.segment.Operator;
+import com.segment.segmentmetricservice.domain.segment.Segment;
+import com.segment.segmentmetricservice.domain.user.QUser;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+@Transactional(readOnly = true) // Slave DB 조회 (읽기 전용 트랜잭션)
+public class UserCountCalculator {
+
+    private final JPAQueryFactory queryFactory;
+
+    // QUser 정적 인스턴스 (QueryDSL 생성 객체)
+    private static final QUser user = QUser.user;
+
+    /**
+     * 특정 세그먼트의 조건에 맞는 유저 수를 계산합니다.
+     *
+     * @param segment 세그먼트 메타데이터 (조건 포함)
+     * @return 조건에 부합하는 유저 수 (Long)
+     */
+    public Long countUsersBySegment(Segment segment) {
+        // 1. 세그먼트 조건으로 동적 WHERE 절 생성
+        BooleanBuilder predicate = createPredicate(segment);
+
+        // 2. QueryDSL 카운트 쿼리 실행
+        Long count = queryFactory
+                .select(user.count()) // SELECT COUNT(*)
+                .from(user)
+                .where(predicate)     // WHERE condition...
+                .fetchOne();
+
+        // 3. 결과 반환 (null일 경우 0 반환)
+        return count != null ? count : 0L;
+    }
+
+    /**
+     * Segment 엔티티의 category, operator, value를 기반으로
+     * QueryDSL의 BooleanBuilder(Predicate)를 생성합니다.
+     */
+    private BooleanBuilder createPredicate(Segment segment) {
+        BooleanBuilder builder = new BooleanBuilder();
+
+        String category = segment.getCategory();   // 컬럼명 (ex: "age", "location")
+        Operator operator = segment.getOperator(); // 연산자 (ex: EQUALS, GTE)
+        String value = segment.getValue();         // 비교값 (ex: "20", "서울")
+
+        // 값이 없거나 비어있으면 조건 없이 전체 카운트로 간주하거나 예외 처리 (여기선 무시)
+        if (!StringUtils.hasText(value)) {
+            log.warn("Segment ID {} has empty value. Ignoring condition.", segment.getId());
+            return builder;
+        }
+
+        // 카테고리(컬럼)별 타입 분기 처리
+        switch (category) {
+            case "location":
+                builder.and(buildStringPredicate(user.location, operator, value));
+                break;
+            case "gender":
+                builder.and(buildStringPredicate(user.gender, operator, value));
+                break;
+            case "age":
+                builder.and(buildNumberPredicate(user.age, operator, value));
+                break;
+            case "order_count":
+                builder.and(buildNumberPredicate(user.orderCount, operator, value));
+                break;
+            default:
+                log.warn("Unknown category: {}. Creating empty predicate.", category);
+                // 필요 시 예외를 던져 배치를 중단시킬 수도 있음
+                // throw new IllegalArgumentException("Unknown category: " + category);
+        }
+
+        return builder;
+    }
+
+    /**
+     * 문자열 타입 컬럼(StringPath)에 대한 동적 조건 생성
+     * 지원 연산자: EQUALS, NOT_EQUALS, CONTAINS, STARTS_WITH
+     */
+    private BooleanExpression buildStringPredicate(StringPath path, Operator operator, String value) {
+        switch (operator) {
+            case EQUALS:
+                return path.eq(value);
+            case NOT_EQUALS:
+                return path.ne(value);
+            case CONTAINS: // LIKE '%value%'
+                return path.contains(value);
+            case STARTS_WITH: // LIKE 'value%'
+                return path.startsWith(value);
+            default:
+                throw new IllegalArgumentException("Unsupported operator for String type: " + operator);
+        }
+    }
+
+    /**
+     * 숫자 타입 컬럼(NumberPath)에 대한 동적 조건 생성
+     * 지원 연산자: EQUALS, NOT_EQUALS, GT, GTE, LT, LTE
+     */
+    private BooleanExpression buildNumberPredicate(NumberPath<Integer> path, Operator operator, String value) {
+        int intValue;
+        try {
+            intValue = Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid number format for value: " + value);
+        }
+
+        switch (operator) {
+            case EQUALS:
+                return path.eq(intValue);
+            case NOT_EQUALS:
+                return path.ne(intValue);
+            case GT:  // >
+                return path.gt(intValue);
+            case GTE: // >=
+                return path.goe(intValue);
+            case LT:  // <
+                return path.lt(intValue);
+            case LTE: // <=
+                return path.loe(intValue);
+            default:
+                throw new IllegalArgumentException("Unsupported operator for Number type: " + operator);
+        }
+    }
+}
