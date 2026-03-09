@@ -19,7 +19,7 @@ public class SegmentDailyMetricProgress {
     private Long userCount;
 
     @Enumerated(EnumType.STRING)
-    private ProcessStatus status; // PENDING, COUNTED, INSERTED
+    private ProcessStatus status;
 
     public SegmentDailyMetricProgress(Long segmentId, LocalDate metricDate) {
         this.segmentId = segmentId;

@@ -9,6 +9,9 @@ import java.util.List;
 @Repository
 public interface SegmentDailyMetricProgressRepository extends JpaRepository<SegmentDailyMetricProgress, Long> {
 
+    // TopN 키워드를 사용해 간단하게 페이징 쿼리 생성
+    List<SegmentDailyMetricProgress> findTop1000ByMetricDateAndStatus(LocalDate date, ProcessStatus status);
+
     /**
      * 특정 날짜와 상태에 해당하는 작업 목록을 조회합니다.
      * * 사용처 1: 배치 Step 2 시작 시 'PENDING' 상태인 작업 조회 (재시도 포함)
@@ -21,9 +24,4 @@ public interface SegmentDailyMetricProgressRepository extends JpaRepository<Segm
      * 중복 초기화 방지용
      */
     boolean existsByMetricDate(LocalDate metricDate);
-
-    /**
-     * (선택) 배치가 완전히 끝난 후 해당 날짜의 임시 데이터를 정리할 때 사용
-     */
-    void deleteByMetricDate(LocalDate metricDate);
 }

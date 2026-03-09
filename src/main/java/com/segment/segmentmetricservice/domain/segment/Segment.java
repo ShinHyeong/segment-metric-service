@@ -1,19 +1,27 @@
 package com.segment.segmentmetricservice.domain.segment;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
+import jakarta.persistence.*;
+import lombok.AccessLevel;
 import lombok.Getter;
-import org.springframework.data.annotation.Id;
+import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Segment {
     @Id
-    private Long id; // segment_id
-    private String category; // 필터 컬럼 (ex: location, order_count)
+    @Column(name = "segment_id") // 이제 ID가 곧 세그먼트 번호가 됩니다.
+    private Long id;
 
-    @Enumerated(EnumType.STRING)
-    private Operator operator;
-    private String value; // 비교 값
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "json")
+    private List<SegmentCondition> conditions = new ArrayList<>();
+
+    private LocalDate createdAt;
 }

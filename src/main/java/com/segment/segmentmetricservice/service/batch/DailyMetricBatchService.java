@@ -38,40 +38,36 @@ public class DailyMetricBatchService {
         log.info("Batch Start: {}", today);
 
         // Step 1. 초기화 (진행 상태 테이블에 PENDING 상태로 세팅)
-        // OOM 방지를 위해 필요한 경우 여기서도 페이징/스트림 처리 가능 (설계상 2만개는 OK)
-        List<Segment> allSegments = segmentRepository.findAll();
-        initProgressTable(allSegments, today);
+        initProgressTable(today);
 
         // Step 2. 병렬 Count 처리
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        int pageSize = 1000;
+        while (true) {
+            // PENDING 상태인 데이터를 1000개만 가져옴
+            List<SegmentDailyMetricProgress> pendings = progressRepository.findTop1000ByMetricDateAndStatus(today, ProcessStatus.PENDING);
 
-        // 아직 완료되지 않은(PENDING) 작업 조회 (재시도 시에도 유효)
-        List<SegmentDailyMetricProgress> pendings =
-                progressRepository.findAllByMetricDateAndStatus(today, ProcessStatus.PENDING);
+            if (pendings.isEmpty()) break; // 더 이상 처리할 게 없으면 탈출
 
-        for (SegmentDailyMetricProgress progress : pendings) {
-            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                try {
-                    // 세그먼트 정보 조회
-                    Segment segment = segmentRepository.findById(progress.getSegmentId()).orElseThrow();
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            for (SegmentDailyMetricProgress progress : pendings) {
+                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                    try {
+                        Segment segment = segmentRepository.findById(progress.getSegmentId()).orElseThrow();
+                        Long count = userCountCalculator.countUsersBySegment(segment);
 
-                    // Count 계산 (Slave DB)
-                    Long count = userCountCalculator.countUsersBySegment(segment);
+                        progress.updateCount(count);
+                        progressRepository.save(progress);
+                    } catch (Exception e) {
+                        log.error("Error segment {}", progress.getSegmentId(), e);
+                    }
+                }, taskExecutor);
+                futures.add(future);
+            }
 
-                    // Progress 업데이트 (COUNTED)
-                    progress.updateCount(count);
-                    progressRepository.save(progress); // 개별 트랜잭션 (빠른 커밋)
-
-                } catch (Exception e) {
-                    log.error("Error calculating segment {}", progress.getSegmentId(), e);
-                    // 실패 시 Status는 PENDING 유지 -> 다음 배치/재시도 시 처리
-                }
-            }, taskExecutor);
-            futures.add(future);
+            // 1000개 묶음이 다 끝날 때까지 대기 후 다음 1000개 진행 (Throttling 효과)
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            log.info("1000개 세그먼트 처리 완료...");
         }
-
-        // 모든 병렬 작업 완료 대기
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
         // Step 3. Bulk Insert
         flushCountedToMetricTable(today);
@@ -79,15 +75,26 @@ public class DailyMetricBatchService {
         log.info("Batch End");
     }
 
-    private void initProgressTable(List<Segment> segments, LocalDate date) {
-        // 이미 해당 날짜 데이터가 있으면 스킵 (재시도 로직 지원)
+    private void initProgressTable(LocalDate date) {
+        // 이미 해당 날짜 데이터가 있으면 스킵 (중복생성 방지)
         if (progressRepository.existsByMetricDate(date)) return;
 
-        List<SegmentDailyMetricProgress> initData = segments.stream()
-                .map(s -> new SegmentDailyMetricProgress(s.getId(), date))
-                .collect(Collectors.toList());
+        int pageSize = 1000;
+        int pageNumber = 0;
+        org.springframework.data.domain.Page<Segment> segmentPage;
 
-        progressRepository.saveAll(initData); // JPA Batch Insert 설정 활용
+        do {
+            segmentPage = segmentRepository.findAll(org.springframework.data.domain.PageRequest.of(pageNumber, pageSize));
+
+            List<SegmentDailyMetricProgress> initData = segmentPage.getContent().stream()
+                    .map(s -> new SegmentDailyMetricProgress(s.getId(), date))
+                    .collect(Collectors.toList());
+
+            progressRepository.saveAll(initData);
+
+            pageNumber++;
+            log.info("Progress 초기화 중... Page: {}", pageNumber);
+        } while (segmentPage.hasNext()); // 다음 페이지가 없을 때까지 반복
     }
 
     private void flushCountedToMetricTable(LocalDate date) {

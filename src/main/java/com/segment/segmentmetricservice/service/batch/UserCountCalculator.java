@@ -7,12 +7,15 @@ import com.querydsl.core.types.dsl.StringPath;
 import com.querydsl.jpa.impl.JPAQueryFactory;
 import com.segment.segmentmetricservice.domain.segment.Operator;
 import com.segment.segmentmetricservice.domain.segment.Segment;
+import com.segment.segmentmetricservice.domain.segment.SegmentCondition;
 import com.segment.segmentmetricservice.domain.user.QUser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+
+import java.util.List;
 
 @Slf4j
 @Service
@@ -47,40 +50,43 @@ public class UserCountCalculator {
     }
 
     /**
-     * Segment 엔티티의 category, operator, value를 기반으로
-     * QueryDSL의 BooleanBuilder(Predicate)를 생성합니다.
+     * Segment 내부의 List<SegmentCondition>을 순회하며
+     * 모든 조건을 AND로 결합한 동적 WHERE 절 생성합니다.
      */
     private BooleanBuilder createPredicate(Segment segment) {
         BooleanBuilder builder = new BooleanBuilder();
 
-        String category = segment.getCategory();   // 컬럼명 (ex: "age", "location")
-        Operator operator = segment.getOperator(); // 연산자 (ex: EQUALS, GTE)
-        String value = segment.getValue();         // 비교값 (ex: "20", "서울")
+        List<SegmentCondition> conditions = segment.getConditions();
 
-        // 값이 없거나 비어있으면 조건 없이 전체 카운트로 간주하거나 예외 처리 (여기선 무시)
-        if (!StringUtils.hasText(value)) {
-            log.warn("Segment ID {} has empty value. Ignoring condition.", segment.getId());
+        if (conditions == null || conditions.isEmpty()) {
+            log.warn("Segment ID {} has no conditions.", segment.getId());
             return builder;
         }
 
-        // 카테고리(컬럼)별 타입 분기 처리
-        switch (category) {
-            case "location":
-                builder.and(buildStringPredicate(user.location, operator, value));
-                break;
-            case "gender":
-                builder.and(buildStringPredicate(user.gender, operator, value));
-                break;
-            case "age":
-                builder.and(buildNumberPredicate(user.age, operator, value));
-                break;
-            case "order_count":
-                builder.and(buildNumberPredicate(user.orderCount, operator, value));
-                break;
-            default:
-                log.warn("Unknown category: {}. Creating empty predicate.", category);
-                // 필요 시 예외를 던져 배치를 중단시킬 수도 있음
-                // throw new IllegalArgumentException("Unknown category: " + category);
+        for (SegmentCondition condition : conditions) {
+            String category = condition.getCategory();
+            Operator operator = condition.getOperator();
+            String value = condition.getValue();
+
+            if (!StringUtils.hasText(value)) continue;
+
+            // 기존의 switch-case 로직을 각 condition에 대해 실행
+            switch (category) {
+                case "location":
+                    builder.and(buildStringPredicate(user.location, operator, value));
+                    break;
+                case "gender":
+                    builder.and(buildStringPredicate(user.gender, operator, value));
+                    break;
+                case "age":
+                    builder.and(buildNumberPredicate(user.age, operator, value));
+                    break;
+                case "order_count":
+                    builder.and(buildNumberPredicate(user.orderCount, operator, value));
+                    break;
+                default:
+                    log.warn("Unknown category: {}", category);
+            }
         }
 
         return builder;
