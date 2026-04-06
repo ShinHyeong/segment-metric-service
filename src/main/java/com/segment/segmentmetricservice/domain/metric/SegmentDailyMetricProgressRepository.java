@@ -1,5 +1,6 @@
 package com.segment.segmentmetricservice.domain.metric;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -9,9 +10,8 @@ import java.util.List;
 @Repository
 public interface SegmentDailyMetricProgressRepository extends JpaRepository<SegmentDailyMetricProgress, Long> {
 
-    // TopN 키워드를 사용해 간단하게 페이징 쿼리 생성
-    List<SegmentDailyMetricProgress> findTop1000ByMetricDateAndStatus(LocalDate date, ProcessStatus status);
-
+    List<SegmentDailyMetricProgress> findByMetricDateAndStatus(
+            LocalDate date, ProcessStatus status, Pageable pageable);
     /**
      * 특정 날짜와 상태에 해당하는 작업 목록을 조회합니다.
      * * 사용처 1: 배치 Step 2 시작 시 'PENDING' 상태인 작업 조회 (재시도 포함)
