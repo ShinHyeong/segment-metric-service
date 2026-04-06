@@ -1,13 +1,12 @@
 package com.segment.segmentmetricservice.service.batch;
 
 import com.segment.segmentmetricservice.domain.metric.ProcessStatus;
-import com.segment.segmentmetricservice.domain.metric.SegmentDailyMetricProgress;
-import com.segment.segmentmetricservice.domain.metric.SegmentDailyMetricProgressRepository;
+import com.segment.segmentmetricservice.domain.metric.SegmentDailyMetric;
+import com.segment.segmentmetricservice.domain.metric.SegmentDailyMetricRepository;
 import com.segment.segmentmetricservice.domain.segment.Segment;
 import com.segment.segmentmetricservice.domain.segment.SegmentRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,56 +27,53 @@ import java.util.stream.Collectors;
 public class DailyMetricBatchService {
 
     private final SegmentRepository segmentRepository;
-    private final SegmentDailyMetricProgressRepository progressRepository;
+    private final SegmentDailyMetricRepository metricRepository;
     private final UserCountCalculator userCountCalculator;
-    private final MetricBulkInserter metricBulkInserter;
-    private final MeterRegistry meterRegistry;
     private final Executor taskExecutor;
-
+    private final MeterRegistry meterRegistry;
 
     @Value("${batch.chunk-size:1000}")
     private int chunkSize;
 
-    public DailyMetricBatchService(SegmentRepository segmentRepository,
-                                   SegmentDailyMetricProgressRepository progressRepository,
-                                   UserCountCalculator userCountCalculator,
-                                   MetricBulkInserter metricBulkInserter,
-                                   MeterRegistry meterRegistry,
-                                   @Qualifier("batchTaskExecutor") Executor taskExecutor) {
+    public DailyMetricBatchService(
+            SegmentRepository segmentRepository,
+            SegmentDailyMetricRepository metricRepository,
+            UserCountCalculator userCountCalculator,
+            @Qualifier("batchTaskExecutor") Executor taskExecutor,
+            MeterRegistry meterRegistry) {
         this.segmentRepository = segmentRepository;
-        this.progressRepository = progressRepository;
+        this.metricRepository = metricRepository;
         this.userCountCalculator = userCountCalculator;
-        this.metricBulkInserter = metricBulkInserter;
-        this.meterRegistry = meterRegistry;
         this.taskExecutor = taskExecutor;
+        this.meterRegistry = meterRegistry;
     }
 
     @Scheduled(cron = "0 0 0 * * *")
     public void executeDailyBatch() {
         LocalDate today = LocalDate.now();
-        log.info("Batch Start: {}", today);
-        // 전체 배치 소요시간 측정
+        log.info("Batch Start: {} | chunkSize={}", today, chunkSize);
+
         Timer.Sample totalSample = Timer.start(meterRegistry);
 
-        // Step 1. 초기화 (진행 상태 테이블에 PENDING 상태로 세팅)
-        initProgressTable(today);
+        // Step 1. PENDING 상태로 초기화
+        initMetricTable(today);
 
         // Step 2. 병렬 Count 처리
         processCountStep(today);
 
-        // Step 3. Bulk Insert
-        flushCountedToMetricTable(today);
+        // Step 3. COUNTED → INSERTED 상태 전환 (완료 마킹)
+        markCompleted(today);
 
         totalSample.stop(Timer.builder("batch.total.duration")
                 .tag("chunkSize", String.valueOf(chunkSize))
                 .register(meterRegistry));
 
-        log.info("Batch End");
+        log.info("Batch End: {} | chunkSize={}", today, chunkSize);
     }
 
-    private void initProgressTable(LocalDate date) {
-        if (progressRepository.existsByMetricDate(date)) {
-            log.info("Progress 테이블 이미 초기화됨. 스킵.");
+    private void initMetricTable(LocalDate date) {
+        if (metricRepository.existsByMetricDate(date)) {
+            log.info("이미 초기화됨. 스킵.");
             return;
         }
 
@@ -89,14 +85,14 @@ public class DailyMetricBatchService {
         do {
             segmentPage = segmentRepository.findAll(PageRequest.of(pageNumber, chunkSize));
 
-            List<SegmentDailyMetricProgress> initData = segmentPage.getContent().stream()
-                    .map(s -> new SegmentDailyMetricProgress(s.getId(), date))
+            List<SegmentDailyMetric> initData = segmentPage.getContent().stream()
+                    .map(s -> new SegmentDailyMetric(s.getId(), date))
                     .collect(Collectors.toList());
 
-            progressRepository.saveAll(initData);
+            metricRepository.saveAll(initData);
 
             pageNumber++;
-            log.info("Progress 초기화 중... Page: {}", pageNumber);
+            log.info("초기화 중... Page: {}", pageNumber);
         } while (segmentPage.hasNext());
 
         initSample.stop(Timer.builder("batch.init.duration")
@@ -109,8 +105,8 @@ public class DailyMetricBatchService {
         int round = 0;
 
         while (true) {
-            List<SegmentDailyMetricProgress> pendings =
-                    progressRepository.findByMetricDateAndStatus(
+            List<SegmentDailyMetric> pendings =
+                    metricRepository.findByMetricDateAndStatus(
                             today, ProcessStatus.PENDING, PageRequest.of(0, chunkSize));
 
             if (pendings.isEmpty()) break;
@@ -118,19 +114,19 @@ public class DailyMetricBatchService {
             Timer.Sample chunkSample = Timer.start(meterRegistry);
 
             List<CompletableFuture<Void>> futures = new ArrayList<>();
-            for (SegmentDailyMetricProgress progress : pendings) {
+            for (SegmentDailyMetric metric : pendings) {
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                     Timer.Sample segSample = Timer.start(meterRegistry);
                     try {
-                        Segment segment = segmentRepository.findById(progress.getSegmentId()).orElseThrow();
+                        Segment segment = segmentRepository.findById(metric.getSegmentId()).orElseThrow();
                         Long count = userCountCalculator.countUsersBySegment(segment);
 
-                        progress.updateCount(count);
-                        progressRepository.save(progress);
+                        metric.updateCount(count); // status → COUNTED, userCount 반영
+                        metricRepository.save(metric);
                     } catch (Exception e) {
                         meterRegistry.counter("batch.segment.error",
                                 "chunkSize", String.valueOf(chunkSize)).increment();
-                        log.error("Error segment {}", progress.getSegmentId(), e);
+                        log.error("Error segment {}", metric.getSegmentId(), e);
                     } finally {
                         segSample.stop(Timer.builder("batch.segment.count.duration")
                                 .tag("chunkSize", String.valueOf(chunkSize))
@@ -140,7 +136,6 @@ public class DailyMetricBatchService {
                 futures.add(future);
             }
 
-            // 청크 단위 대기 (Throttling)
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
             chunkSample.stop(Timer.builder("batch.chunk.duration")
@@ -157,28 +152,19 @@ public class DailyMetricBatchService {
                 .register(meterRegistry));
     }
 
-    private void flushCountedToMetricTable(LocalDate date) {
+    private void markCompleted(LocalDate date) {
         Timer.Sample flushSample = Timer.start(meterRegistry);
 
-        List<SegmentDailyMetricProgress> countedList =
-                progressRepository.findAllByMetricDateAndStatus(date, ProcessStatus.COUNTED);
+        List<SegmentDailyMetric> countedList =
+                metricRepository.findByMetricDateAndStatus(
+                        date, ProcessStatus.COUNTED, PageRequest.of(0, Integer.MAX_VALUE));
 
         for (int i = 0; i < countedList.size(); i += chunkSize) {
-            List<SegmentDailyMetricProgress> batch =
+            List<SegmentDailyMetric> batch =
                     countedList.subList(i, Math.min(i + chunkSize, countedList.size()));
 
-            Timer.Sample insertSample = Timer.start(meterRegistry);
-
-            // 1. Metric 테이블에 Bulk Insert
-            metricBulkInserter.bulkInsertMetrics(batch);
-
-            // 2. Progress 상태 업데이트 (INSERTED)
-            batch.forEach(SegmentDailyMetricProgress::markInserted);
-            progressRepository.saveAll(batch);
-
-            insertSample.stop(Timer.builder("batch.bulk.insert.duration")
-                    .tag("chunkSize", String.valueOf(chunkSize))
-                    .register(meterRegistry));
+            batch.forEach(SegmentDailyMetric::markCompleted);
+            metricRepository.saveAll(batch);
         }
 
         flushSample.stop(Timer.builder("batch.flush.step.duration")
