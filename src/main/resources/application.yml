@@ -91,4 +91,3 @@ logging:
   level:
     org.hibernate.SQL: INFO
     com.zaxxer.hikari: INFO
-    com.querydsl.sql: DEBUG
