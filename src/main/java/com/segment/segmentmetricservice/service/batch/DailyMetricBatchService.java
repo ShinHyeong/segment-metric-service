@@ -49,7 +49,7 @@ public class DailyMetricBatchService {
         this.meterRegistry = meterRegistry;
     }
 
-    @Scheduled(cron = "0 0 0 * * *")
+    @Scheduled(cron = "0 0 0 * * *", zone = "Asia/Seoul")
     @Transactional(transactionManager = "segmentTransactionManager")
     public void executeDailyBatch() {
         LocalDate today = LocalDate.now();
