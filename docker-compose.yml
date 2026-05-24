@@ -1,35 +1,171 @@
-version: '3.8'
+# 로컬
+
 services:
-  mysql-master:
+  app:
+    image: segment-metric-service
+    container_name: segment-metric-app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      USER_DB_NAME: ${USER_DB_NAME}
+      USER_DB_SLAVE_HOST: ${USER_DB_SLAVE_HOST}
+      USER_DB_USERNAME: ${USER_DB_USERNAME}
+      USER_DB_PASSWORD: ${USER_DB_PASSWORD}
+      SEGMENT_DB_NAME: ${SEGMENT_DB_NAME}
+      SEGMENT_DB_HOST: ${SEGMENT_DB_HOST}
+      SEGMENT_DB_USERNAME: ${SEGMENT_DB_USERNAME}
+      SEGMENT_DB_PASSWORD: ${SEGMENT_DB_PASSWORD}
+      ENV: local
+      TZ: Asia/Seoul
+      JAVA_OPTS: "-XX:MaxRAMPercentage=75.0 -XX:+UseG1GC -Duser.timezone=Asia/Seoul"
+    depends_on:
+      user-db-slave:
+        condition: service_healthy
+      segment-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 60s
+    networks: [app-network]
+
+  user-db-master:
     image: mysql:8.0
+    container_name: user-db-master
     ports:
       - "3306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: replication_test
-      MYSQL_USER: admin
-      MYSQL_PASSWORD: admin_password
-    command: --default-authentication-plugin=mysql_native_password
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${USER_DB_NAME}
+      MYSQL_USER: ${USER_DB_USERNAME}
+      MYSQL_PASSWORD: ${USER_DB_PASSWORD}
+      TZ: Asia/Seoul
     volumes:
-      - mysql-data:/var/lib/mysql
+      - user-master-data:/var/lib/mysql
+      - ./db/user-init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./db/seed-load.sql:/docker-entrypoint-initdb.d/02-seed.sql
+      - ./db/accounts.csv:/var/lib/mysql-files/accounts.csv
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks: [app-network]
+    command: >
+      --innodb-buffer-pool-size=2G
+      --max-connections=300
+      --secure-file-priv=/var/lib/mysql-files
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+
+  user-db-slave:
+    image: mysql:8.0
+    container_name: user-db-slave
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${USER_DB_NAME}
+      MYSQL_USER: ${USER_DB_USERNAME}
+      MYSQL_PASSWORD: ${USER_DB_PASSWORD}
+      TZ: Asia/Seoul
+    volumes:
+      - user-slave-data:/var/lib/mysql
+      - ./db/user-init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./db/seed-load.sql:/docker-entrypoint-initdb.d/02-seed.sql
+      - ./db/accounts.csv:/var/lib/mysql-files/accounts.csv
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks: [app-network]
+    command: >
+      --innodb-buffer-pool-size=2G
+      --max-connections=300
+      --secure-file-priv=/var/lib/mysql-files
+      --innodb-adaptive-hash-index=OFF
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+
+  segment-db:
+    image: mysql:8.0
+    container_name: segment-db
+    ports:
+      - "3308:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${SEGMENT_DB_NAME}
+      MYSQL_USER: ${SEGMENT_DB_USERNAME}
+      MYSQL_PASSWORD: ${SEGMENT_DB_PASSWORD}
+      TZ: Asia/Seoul
+    volumes:
+      - segment-db-data:/var/lib/mysql
+      - ./db/segment-init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks: [app-network]
+    command: >
+      --innodb-buffer-pool-size=2G
+      --max-connections=300
+    deploy:
+      resources:
+        limits:
+          memory: 3G
 
   prometheus:
     image: prom/prometheus:latest
+    container_name: prometheus
     ports:
       - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - prometheus-data:/prometheus
+    networks: [app-network]
+    depends_on:
+      - app
 
   grafana:
     image: grafana/grafana:latest
+    container_name: grafana
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
+    networks: [app-network]
 
 volumes:
-  mysql-data:
+  user-master-data:
+  user-slave-data:
+  segment-db-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  app-network:
+    driver: bridge
