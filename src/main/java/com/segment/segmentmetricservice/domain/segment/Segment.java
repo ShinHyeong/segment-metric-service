@@ -24,4 +24,5 @@ public class Segment {
     private List<SegmentCondition> conditions = new ArrayList<>();
 
     private LocalDate createdAt;
+    private LocalDate updatedAt;
 }
