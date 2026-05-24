@@ -74,11 +74,6 @@ public class DailyMetricBatchService {
     }
 
     private void initMetricTable(LocalDate date) {
-        if (metricRepository.existsByMetricDate(date)) {
-            log.info("이미 초기화됨. 스킵.");
-            return;
-        }
-
         Timer.Sample initSample = Timer.start(meterRegistry);
 
         int pageNumber = 0;
@@ -87,11 +82,13 @@ public class DailyMetricBatchService {
         do {
             segmentPage = segmentRepository.findAll(PageRequest.of(pageNumber, chunkSize));
 
-            List<SegmentDailyMetric> initData = segmentPage.getContent().stream()
-                    .map(s -> new SegmentDailyMetric(s.getId(), date))
-                    .collect(Collectors.toList());
+            List<Long> segmentIds = segmentPage.getContent().stream()
+                    .map(Segment::getId)
+                    .toList();
 
-            metricRepository.saveAll(initData);
+            if (!segmentIds.isEmpty()) {
+                metricRepository.bulkInsertIfNotExists(date, segmentIds);
+            }
 
             pageNumber++;
             log.info("초기화 중... Page: {}", pageNumber);

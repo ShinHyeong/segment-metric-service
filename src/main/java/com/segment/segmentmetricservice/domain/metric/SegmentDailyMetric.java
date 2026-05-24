@@ -14,6 +14,15 @@ import java.time.LocalDate;
         indexes = {
                 @Index(name = "idx_segment_date", columnList = "segment_id, metric_date")
         })
+@Table(
+        name = "segment_daily_metric",
+        uniqueConstraints = { //배치 중 장애로 중복 INSERT 문제를 해결하기 위한 복합 유니크 인덱스
+                @UniqueConstraint(
+                        name = "uk_segment_date",
+                        columnNames = {"segment_id", "metric_date"}
+                )
+            },
+    )
 public class SegmentDailyMetric {
 
     @Id
