@@ -9,12 +9,7 @@ import lombok.NoArgsConstructor;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Table(
-        name = "account",
-        indexes = {
-                // 배치 성능 최적화를 위한 커버링 인덱스 (카디널리티가 높은 순서 고려)
-                // 실제 인덱스 순서는 데이터 분포에 따라 조정 필요 (예: location -> gender -> age)
-                @Index(name = "idx_user_covering", columnList = "location, gender, age, order_count")
-        }
+        name = "account"
 )
 public class User {
 
