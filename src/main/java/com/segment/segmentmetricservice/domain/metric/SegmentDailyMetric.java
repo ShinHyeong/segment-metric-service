@@ -10,10 +10,6 @@ import java.time.LocalDate;
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-@Table(name = "segment_daily_metric",
-        indexes = {
-                @Index(name = "idx_segment_date", columnList = "segment_id, metric_date")
-        })
 @Table(
         name = "segment_daily_metric",
         uniqueConstraints = { //배치 중 장애로 중복 INSERT 문제를 해결하기 위한 복합 유니크 인덱스
@@ -22,6 +18,9 @@ import java.time.LocalDate;
                         columnNames = {"segment_id", "metric_date"}
                 )
             },
+        indexes = { //추세 조회 API용 커버링 인덱스
+        @Index(name = "idx_segment_date_count", columnList = "segment_id, metric_date, user_count")
+        }
     )
 public class SegmentDailyMetric {
 
