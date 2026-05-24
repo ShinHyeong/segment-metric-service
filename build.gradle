@@ -24,6 +24,19 @@ repositories {
 	mavenCentral()
 }
 
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/main/java', 'src/main/generated']
+        }
+    }
+    codegen {
+        java {
+            srcDirs = ['src/codegen/java']
+        }
+    }
+}
+
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
@@ -37,17 +50,55 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-starter-quartz-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    // [QueryDSL]
-    implementation 'com.querydsl:querydsl-jpa:5.0.0:jakarta'
-    annotationProcessor "com.querydsl:querydsl-apt:5.0.0:jakarta"
     annotationProcessor "jakarta.annotation:jakarta.annotation-api"
     annotationProcessor "jakarta.persistence:jakarta.persistence-api"
+
+    // [QueryDSL-JPA]
+    implementation 'io.github.openfeign.querydsl:querydsl-jpa:7.1'
+    implementation 'io.github.openfeign.querydsl:querydsl-apt:7.1'
+    // [QueryDSL-SQL]
+    implementation 'io.github.openfeign.querydsl:querydsl-sql:7.1'
+    implementation 'io.github.openfeign.querydsl:querydsl-sql-spring:7.1'
+    implementation 'io.github.openfeign.querydsl:querydsl-sql-codegen:7.1'
+    // querydsl-sql codegen 전용 (main/test와 완전히 격리됨)
+    codegenImplementation 'io.github.openfeign.querydsl:querydsl-sql-codegen:7.1'
+    codegenImplementation 'com.mysql:mysql-connector-j'
     //모니터링
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'io.micrometer:micrometer-registry-prometheus'
     implementation 'com.fasterxml.jackson.core:jackson-databind'
 }
 
+tasks.register('generateSqlQClass', JavaExec) {
+    group = 'querydsl'
+    description = 'user-slave에서 SQL용 S클래스 생성'
+
+    classpath = sourceSets.codegen.runtimeClasspath
+    mainClass = 'com.segment.segmentmetricservice.utils.SqlQClassGenerator'
+
+    doFirst {
+        def dbName = System.getenv('USER_DB_NAME') ?: 'user_db'
+        def dbUser = System.getenv('USER_DB_USERNAME') ?: { throw new GradleException('USER_DB_USERNAME 없음') }()
+        def dbPwd  = System.getenv('USER_DB_PASSWORD')  ?: { throw new GradleException('USER_DB_PASSWORD 없음') }()
+
+        //DB url 조립
+        def env = System.getenv('ENV')
+        def host = ""
+        def port = ""
+        if ("aws".equalsIgnoreCase(env)){
+            host = System.getenv('USER_DB_SLAVE_HOST')  ?:  { throw new GradleException('RDS 주소 없음') }()
+            port = "3306" // AWS RDS MySQL 기본 포트
+        } else {
+            host = "localhost"
+            port = "3307" // 로컬 도커가 열어둔 MacOS 포트
+        }
+        def dbUrl = "jdbc:mysql://${host}:${port}/${dbName}?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul"
+
+        systemProperty 'codegen.url',  dbUrl
+        systemProperty 'codegen.user', dbUser
+        systemProperty 'codegen.pwd',  dbPwd
+    }
+}
 tasks.named('test') {
 	useJUnitPlatform()
 }
