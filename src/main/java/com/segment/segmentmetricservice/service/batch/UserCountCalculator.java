@@ -20,7 +20,7 @@ import java.util.List;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@Transactional(readOnly = true) // Slave DB 조회 (읽기 전용 트랜잭션)
+@Transactional(readOnly = true, transactionManager = "userTransactionManager") // Slave DB 조회 (읽기 전용 트랜잭션)
 public class UserCountCalculator {
 
     private final JPAQueryFactory queryFactory;
