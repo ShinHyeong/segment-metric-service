@@ -84,8 +84,11 @@ public class UserCountCalculator {
 
     /* 힌트를 강제할 케이스와 인덱스 */
     private static final Map<Set<String>,String> INDEX_HINT_MAP = Map.of(
-            Set.of("location", "order_count"), "idx_location_order_count",
-            Set.of("location", "age"), "idx_location_gender_age"
+            Set.of("location", "order_count"), "idx_location_gender_order_count",
+            Set.of("location", "gender", "order_count"), "idx_location_gender_order_count",
+            Set.of("location", "age"), "idx_location_gender_age",
+            Set.of("gender", "order_count"),          "idx_gender_order_count_age",
+            Set.of("gender", "order_count", "age"),   "idx_gender_order_count_age"
     );
 
 
