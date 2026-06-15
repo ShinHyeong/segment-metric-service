@@ -1,4 +1,4 @@
-package com.segment.segmentmetricservice.service.batch;
+package com.segment.segmentmetricservice.service.batch.index;
 
 import com.querydsl.core.BooleanBuilder;
 import com.querydsl.core.types.dsl.BooleanExpression;
@@ -24,7 +24,7 @@ import com.segment.segmentmetricservice.domain.user.sql.SAccount;
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true, transactionManager = "userTransactionManager") // Slave DB 조회 (읽기 전용 트랜잭션)
-public class UserCountCalculator {
+public class UserCountQueryService {
 
     private final MySQLQueryFactory mySQLQueryFactory;
 
@@ -171,13 +171,13 @@ public class UserCountCalculator {
                 return path.eq(intValue);
             case NOT_EQUALS:
                 return path.ne(intValue);
-            case GT:  // >
+            case GT:
                 return path.gt(intValue);
-            case GTE: // >=
+            case GTE:
                 return path.goe(intValue);
-            case LT:  // <
+            case LT:
                 return path.lt(intValue);
-            case LTE: // <=
+            case LTE:
                 return path.loe(intValue);
             default:
                 throw new IllegalArgumentException("Unsupported operator for Number type: " + operator);
