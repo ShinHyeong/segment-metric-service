@@ -11,20 +11,36 @@ services:
       - "8080:8080"
     environment:
       USER_DB_NAME: ${USER_DB_NAME}
+      USER_DB_MASTER_HOST: ${USER_DB_MASTER_HOST}
       USER_DB_SLAVE_HOST: ${USER_DB_SLAVE_HOST}
       USER_DB_USERNAME: ${USER_DB_USERNAME}
       USER_DB_PASSWORD: ${USER_DB_PASSWORD}
+
       SEGMENT_DB_NAME: ${SEGMENT_DB_NAME}
-      SEGMENT_DB_HOST: ${SEGMENT_DB_HOST}
+      SEGMENT_DB_MASTER_HOST: ${SEGMENT_DB_MASTER_HOST}
+      SEGMENT_DB_SLAVE_HOST: ${SEGMENT_DB_SLAVE_HOST}
       SEGMENT_DB_USERNAME: ${SEGMENT_DB_USERNAME}
       SEGMENT_DB_PASSWORD: ${SEGMENT_DB_PASSWORD}
+
+      APP_ASYNC_SEGMENT_COUNT_CORE_SIZE: ${SEGMENT_COUNT_CORE_SIZE}
+      APP_ASYNC_SEGMENT_COUNT_MAX_SIZE: ${SEGMENT_COUNT_MAX_SIZE}
+      APP_ASYNC_SEGMENT_COUNT_QUEUE_CAPACITY: ${SEGMENT_COUNT_QUEUE_CAPACITY}
+
+      APP_ASYNC_CUBE_PERSIST_CORE_SIZE: ${CUBE_PERSIST_CORE_SIZE}
+      APP_ASYNC_CUBE_PERSIST_MAX_SIZE: ${CUBE_PERSIST_MAX_SIZE}
+      APP_ASYNC_CUBE_PERSIST_QUEUE_CAPACITY: ${CUBE_PERSIST_QUEUE_CAPACITY}
+
       ENV: local
       TZ: Asia/Seoul
       JAVA_OPTS: "-XX:MaxRAMPercentage=75.0 -XX:+UseG1GC -Duser.timezone=Asia/Seoul"
     depends_on:
       user-db-slave:
         condition: service_healthy
-      segment-db:
+      user-db-master:
+        condition: service_healthy
+      segment-db-master:
+        condition: service_healthy
+      segment-db-slave:
         condition: service_healthy
     deploy:
       resources:
@@ -53,6 +69,7 @@ services:
       - user-master-data:/var/lib/mysql
       - ./db/user-init.sql:/docker-entrypoint-initdb.d/01-init.sql
       - ./db/seed-load.sql:/docker-entrypoint-initdb.d/02-seed.sql
+      - ./db/user-master-repl-init.sql:/docker-entrypoint-initdb.d/03-repl.sql
       - ./db/accounts.csv:/var/lib/mysql-files/accounts.csv
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
@@ -65,6 +82,10 @@ services:
       --innodb-buffer-pool-size=2G
       --max-connections=300
       --secure-file-priv=/var/lib/mysql-files
+      --server-id=1
+      --log-bin=mysql-bin
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
     deploy:
       resources:
         limits:
@@ -83,9 +104,7 @@ services:
       TZ: Asia/Seoul
     volumes:
       - user-slave-data:/var/lib/mysql
-      - ./db/user-init.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ./db/seed-load.sql:/docker-entrypoint-initdb.d/02-seed.sql
-      - ./db/accounts.csv:/var/lib/mysql-files/accounts.csv
+      - ./db/user-slave-repl-init.sql:/docker-entrypoint-initdb.d/01-repl.sql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
@@ -98,14 +117,20 @@ services:
       --max-connections=300
       --secure-file-priv=/var/lib/mysql-files
       --innodb-adaptive-hash-index=OFF
+      --server-id=2
+      --read-only=1
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+      --relay-log=mysql-relay-bin         
+      --relay-log-recovery=ON
     deploy:
       resources:
         limits:
           memory: 3G
 
-  segment-db:
+  segment-db-master:
     image: mysql:8.0
-    container_name: segment-db
+    container_name: segment-db-master
     ports:
       - "3308:3306"
     environment:
@@ -115,8 +140,9 @@ services:
       MYSQL_PASSWORD: ${SEGMENT_DB_PASSWORD}
       TZ: Asia/Seoul
     volumes:
-      - segment-db-data:/var/lib/mysql
+      - segment-master-data:/var/lib/mysql
       - ./db/segment-init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./db/segment-master-repl-init.sql:/docker-entrypoint-initdb.d/02-repl.sql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
@@ -127,10 +153,50 @@ services:
     command: >
       --innodb-buffer-pool-size=2G
       --max-connections=300
+      --server-id=3
+      --log-bin=mysql-bin
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
     deploy:
       resources:
         limits:
           memory: 3G
+
+  segment-db-slave:
+    image: mysql:8.0
+    container_name: segment-db-slave
+    ports:
+      - "3309:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${SEGMENT_DB_NAME}
+      MYSQL_USER: ${SEGMENT_DB_USERNAME}
+      MYSQL_PASSWORD: ${SEGMENT_DB_PASSWORD}
+      TZ: Asia/Seoul
+    volumes:
+      - segment-slave-data:/var/lib/mysql
+      - ./db/segment-slave-repl-init.sql:/docker-entrypoint-initdb.d/01-repl.sql
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks: [ app-network ]
+    command: >
+      --innodb-buffer-pool-size=2G
+      --max-connections=300
+      --server-id=4
+      --read-only=1
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+      --relay-log=mysql-relay-bin      
+      --relay-log-recovery=ON
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+
 
   prometheus:
     image: prom/prometheus:latest
@@ -162,7 +228,8 @@ services:
 volumes:
   user-master-data:
   user-slave-data:
-  segment-db-data:
+  segment-master-data:
+  segment-slave-data:
   prometheus-data:
   grafana-data:
 
