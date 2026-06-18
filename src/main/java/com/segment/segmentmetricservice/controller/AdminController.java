@@ -1,6 +1,8 @@
 package com.segment.segmentmetricservice.controller;
 
-import com.segment.segmentmetricservice.service.batch.DailyMetricBatchService;
+import com.segment.segmentmetricservice.service.batch.index.IndexBatchOrchestrator;
+import com.segment.segmentmetricservice.service.batch.cube.CubeBatchOrchestrator;
+import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -13,20 +15,19 @@ import org.springframework.web.bind.annotation.RestController;
  */
 
 @RestController
+@RequiredArgsConstructor
 @RequestMapping("/admin")
 @Profile("!prod")
 public class AdminController {
 
-    private final DailyMetricBatchService batchService;
-
-    public AdminController(DailyMetricBatchService batchService) {
-        this.batchService = batchService;
-    }
+    private final IndexBatchOrchestrator batchService;
+    private final CubeBatchOrchestrator cubeBatchOrchestrator;
 
     @PostMapping("/batch/run")
     public ResponseEntity<String> runBatch() {
         long start = System.currentTimeMillis();
-        batchService.executeDailyBatch();
+        //batchService.executeDailyBatch();
+        cubeBatchOrchestrator.runDailyBatch();
         long elapsed = System.currentTimeMillis() - start;
         return ResponseEntity.ok("Batch completed in " + elapsed + " ms");
     }
